@@ -1,0 +1,138 @@
+name: Deploy
+
+# Solo despliega código que ya pasó el CI en main (o a mano desde Actions).
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Nunca dos deploys a la vez, y uno en curso no se cancela.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # Commit que pasó el CI (workflow_run) o el actual (ejecución manual).
+  COMMIT_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  image:
+    name: Imagen ARM64 → GitHub Container Registry
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    # La VM de Oracle es ARM: el runner ARM nativo (gratis en repos públicos)
+    # compila sin emulación. En otro runner se emula con QEMU (más lento).
+    runs-on: ${{ vars.BUILD_RUNNER || 'ubuntu-24.04-arm' }}
+
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image: ${{ steps.names.outputs.image }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
+
+      - name: Nombres de la imagen
+        id: names
+        run: |
+          repo="ghcr.io/${GITHUB_REPOSITORY,,}"
+          echo "image=${repo}:${COMMIT_SHA::12}" >> "$GITHUB_OUTPUT"
+          echo "latest=${repo}:latest" >> "$GITHUB_OUTPUT"
+
+      - name: Emulación ARM64 (solo en runners x86)
+        if: runner.arch != 'ARM64'
+        run: docker run --privileged --rm tonistiigi/binfmt --install arm64
+
+      - name: Login en GHCR
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+
+      - name: Build y push
+        env:
+          IMAGE: ${{ steps.names.outputs.image }}
+          LATEST: ${{ steps.names.outputs.latest }}
+        run: |
+          docker pull --platform linux/arm64 "$LATEST" || true
+          docker build \
+            --platform linux/arm64 \
+            --target production \
+            --cache-from "$LATEST" \
+            --build-arg BUILDKIT_INLINE_CACHE=1 \
+            --label "org.opencontainers.image.source=https://github.com/${GITHUB_REPOSITORY}" \
+            --label "org.opencontainers.image.revision=${COMMIT_SHA}" \
+            --tag "$IMAGE" --tag "$LATEST" .
+          docker push "$IMAGE"
+          docker push "$LATEST"
+
+  deploy:
+    name: Deploy en Oracle Cloud
+    needs: image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      packages: read
+
+    environment:
+      name: production
+      url: ${{ vars.APP_URL }}
+
+    env:
+      SSH_TARGET: ${{ vars.DEPLOY_USER || 'ubuntu' }}@${{ secrets.DEPLOY_HOST }}
+      APP_DIR: /opt/agendapro
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.COMMIT_SHA }}
+          persist-credentials: false
+
+      - name: Clave SSH
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Con DEPLOY_KNOWN_HOSTS (salida de `ssh-keyscan IP`) se verifica la
+          # identidad del servidor; sin él se confía en la primera conexión.
+          if [ -n "$DEPLOY_KNOWN_HOSTS" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            ssh-keyscan -H "$DEPLOY_HOST" > ~/.ssh/known_hosts
+          fi
+          printf 'Host *\n  IdentityFile ~/.ssh/deploy_key\n  IdentitiesOnly yes\n  ServerAliveInterval 30\n' > ~/.ssh/config
+
+      - name: Archivos de despliegue
+        env:
+          ENV_PRODUCTION: ${{ secrets.ENV_PRODUCTION }}
+        # APP_DIR se expande en el runner a propósito (SC2029).
+        run: |
+          # shellcheck disable=SC2029
+          scp compose.prod.yaml docker/deploy.sh docker/backup.sh "$SSH_TARGET:$APP_DIR/"
+          # shellcheck disable=SC2029
+          printf '%s\n' "$ENV_PRODUCTION" | ssh "$SSH_TARGET" "umask 077 && cat > $APP_DIR/.env.production"
+          # shellcheck disable=SC2029
+          ssh "$SSH_TARGET" "chmod +x $APP_DIR/deploy.sh $APP_DIR/backup.sh"
+
+      - name: Deploy
+        env:
+          IMAGE: ${{ needs.image.outputs.image }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # shellcheck disable=SC2029
+          printf '%s' "$GITHUB_TOKEN" | ssh "$SSH_TARGET" "GHCR_USER=$GITHUB_ACTOR $APP_DIR/deploy.sh $IMAGE"

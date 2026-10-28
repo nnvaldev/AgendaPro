@@ -219,6 +219,44 @@ docker run --rm -v "$(pwd):/tf" -w /tf hashicorp/terraform:1.17.0 test
 
 > Oracle puede recuperar VMs Always Free que pasan semanas casi sin uso. Una app con tráfico y un monitor de uptime cada pocos minutos lo evitan.
 
+## Deploy automático
+
+`.github/workflows/deploy.yml` se ejecuta **solo cuando el CI pasa en `main`** (o a mano desde Actions):
+
+1. **Imagen:** build para ARM64 en un runner ARM nativo de GitHub, sin emulación, y push a GitHub Container Registry con el tag del commit y `latest`.
+2. **Servidor:** por SSH copia `compose.prod.yaml` y los scripts, y escribe `.env.production` desde un secreto con permisos `600`.
+3. **`docker/deploy.sh`:** baja la imagen, corre las migraciones, levanta app, worker y Scheduler, y **espera a que los healthchecks pasen**. Si la versión nueva no queda sana, **vuelve sola a la anterior** y el job falla.
+
+El token del registry viaja por stdin y se cierra sesión al terminar. La imagen en producción queda en `.env.deployed`, así los comandos manuales en el servidor usan la versión que corre de verdad.
+
+**Backups:** `deploy.sh` programa `docker/backup.sh` en cron (04:15 UTC). Hace un `pg_dump` en formato custom y conserva 14 días en `/opt/agendapro/backups`.
+
+### Configurar el deploy (una vez)
+
+En GitHub: **Settings → Environments → New environment** `production`, y dentro:
+
+| Tipo              | Nombre               | Valor                                                                  |
+| ----------------- | -------------------- | ---------------------------------------------------------------------- |
+| Secret            | `DEPLOY_HOST`        | IP pública (salida `public_ip` de Terraform)                           |
+| Secret            | `DEPLOY_SSH_KEY`     | Clave **privada** SSH cuya pública pusiste en `terraform.tfvars`       |
+| Secret            | `ENV_PRODUCTION`     | Contenido completo de tu `.env.production`                             |
+| Secret (opcional) | `DEPLOY_KNOWN_HOSTS` | Salida de `ssh-keyscan <IP>`, para verificar la identidad del servidor |
+| Variable          | `APP_URL`            | `https://tu-dominio`, para el link del deploy                          |
+
+Si el repositorio es privado, los runners ARM no son gratuitos: crea la variable `BUILD_RUNNER=ubuntu-latest` y la imagen se compila con emulación QEMU.
+
+### Comandos en el servidor
+
+```bash
+cd /opt/agendapro
+alias dc='docker compose -f compose.prod.yaml --env-file .env.production --env-file .env.deployed'
+
+dc ps                                     # estado y healthchecks
+dc logs -f app                            # logs en vivo
+dc run --rm app php artisan db:seed --class=DemoBusinessSeeder --force   # negocio de demo
+./backup.sh                               # backup manual
+```
+
 ## Estructura
 
 ```
@@ -252,7 +290,8 @@ tests/Feature/
 - [x] CI con GitHub Actions.
 - [x] Imagen de producción con FrankenPHP y Docker Compose.
 - [x] Infraestructura en Oracle Cloud con Terraform y tests sin cuenta.
-- [ ] Deploy automático con GitHub Actions, backups y demo en vivo.
+- [x] Deploy automático con rollback y backups diarios.
+- [ ] Demo en vivo en Oracle Cloud.
 
 ---
 
