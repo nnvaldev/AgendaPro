@@ -32,6 +32,7 @@ use Illuminate\Support\Str;
  * @property string|null $notes
  * @property string $manage_token
  * @property CarbonImmutable|null $cancelled_at
+ * @property CarbonImmutable|null $reminder_sent_at
  * @property Carbon|null $created_at
  * @property Carbon|null $updated_at
  * @property-read Business $business
@@ -77,6 +78,7 @@ class Booking extends Model
             'starts_at' => 'immutable_datetime',
             'ends_at' => 'immutable_datetime',
             'cancelled_at' => 'immutable_datetime',
+            'reminder_sent_at' => 'immutable_datetime',
             'status' => BookingStatus::class,
             'price_cents' => 'integer',
         ];
@@ -123,6 +125,14 @@ class Booking extends Model
         // Las columnas se guardan en UTC; Eloquent no convierte la zona al enlazar.
         $query->where('bookings.starts_at', '<', CarbonImmutable::instance($end)->utc())
             ->where('bookings.ends_at', '>', CarbonImmutable::instance($start)->utc());
+    }
+
+    /**
+     * Inicio de la reserva en la hora local del negocio.
+     */
+    public function localStartsAt(): CarbonImmutable
+    {
+        return $this->starts_at->setTimezone($this->business->timezone);
     }
 
     public function isCancellable(): bool

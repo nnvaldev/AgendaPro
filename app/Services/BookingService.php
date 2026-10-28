@@ -19,7 +19,10 @@ class BookingService
      */
     private const EXCLUSION_VIOLATION = '23P01';
 
-    public function __construct(private AvailabilityService $availability) {}
+    public function __construct(
+        private AvailabilityService $availability,
+        private BookingNotifier $notifier,
+    ) {}
 
     /**
      * Reserva un horario. Sin profesional, asigna el primero que esté libre.
@@ -41,7 +44,7 @@ class BookingService
             try {
                 // La transacción crea un savepoint: si la restricción rechaza el
                 // insert, la transacción externa sigue usable para el siguiente intento.
-                return DB::transaction(fn () => Booking::create([
+                $booking = DB::transaction(fn () => Booking::create([
                     'business_id' => $service->business_id,
                     'service_id' => $service->id,
                     'staff_member_id' => $staffMemberId,
@@ -54,6 +57,10 @@ class BookingService
                     'customer_phone' => $customer['customer_phone'] ?? null,
                     'notes' => $customer['notes'] ?? null,
                 ]));
+
+                $this->notifier->created($booking);
+
+                return $booking;
             } catch (QueryException $e) {
                 // Otra reserva ganó la carrera por este horario; probamos el siguiente profesional.
                 if ($e->getCode() !== self::EXCLUSION_VIOLATION) {

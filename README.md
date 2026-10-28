@@ -20,6 +20,18 @@ SaaS de reservas online para negocios de servicios —barberías, consultorios, 
 - Reglas de reserva configurables: intervalo de la agenda, anticipación mínima y hasta cuántos días adelante se puede reservar.
 - Autenticación con verificación de email, 2FA y passkeys (Laravel Fortify).
 
+**Correos (en cola)**
+
+| Correo | Para | Cuándo |
+| --- | --- | --- |
+| Reserva confirmada, con `.ics` para el calendario | Cliente | Al reservar |
+| Nueva reserva | Dueño | Al reservar |
+| Recordatorio | Cliente | ~24 h antes, solo si reservó con más de un día de anticipación |
+| Reserva cancelada por el negocio | Cliente | Al cancelarla desde la agenda |
+| El cliente canceló | Dueño | Al cancelar desde su link |
+
+Los correos al cliente salen con el nombre del negocio como remitente y la respuesta va directo al dueño.
+
 | Reserva pública | Panel: horario semanal |
 | --- | --- |
 | ![Página pública de reservas](docs/screenshots/reserva-publica.png) | ![Editor de horario semanal](docs/screenshots/panel-horario.png) |
@@ -37,7 +49,7 @@ SaaS de reservas online para negocios de servicios —barberías, consultorios, 
 | Base de datos | PostgreSQL 18 |
 | Colas y caché | Redis |
 | Entorno | Docker con Laravel Sail, Mailpit para correos en desarrollo |
-| Calidad | PHPUnit (86 tests), PHPStan nivel 7 (Larastan), Pint, `vue-tsc`, Vite+ lint/format |
+| Calidad | PHPUnit (92 tests), PHPStan nivel 7 (Larastan), Pint, `vue-tsc`, Vite+ lint/format |
 
 ## Decisiones técnicas
 
@@ -61,6 +73,9 @@ Todo se guarda en UTC (`timestamptz`) y se calcula en la zona del negocio (`Amer
 
 ### Cálculo de disponibilidad
 `AvailabilityService` genera los horarios de un día por profesional: recorre cada bloque de atención cada `slot_interval_minutes`, exige que el servicio completo entre en el bloque y descarta los horarios dentro de la anticipación mínima, fuera de la ventana de reserva o que se crucen con reservas activas o bloqueos de agenda. Horarios, reservas y bloqueos de todos los profesionales se cargan con eager loading, así que la cantidad de consultas no crece con el tamaño del equipo (sin N+1).
+
+### Correos en cola sin romper la reserva
+Las notificaciones implementan `ShouldQueue` y se encolan con `afterCommit()`, así que nunca se envía un correo de una reserva que terminó revirtiéndose. `BookingNotifier` decide quién recibe qué; si encolar falla (por ejemplo, Redis caído), el error se reporta pero la reserva igual se confirma. El recordatorio lo envía `bookings:send-reminders` cada 15 minutos desde el Scheduler, y marca `reminder_sent_at` antes de encolar para no duplicar.
 
 ### Otros detalles
 - El **precio se congela** en la reserva: si el servicio cambia de precio, el historial no se altera.
@@ -92,6 +107,8 @@ npm run dev
 
 La app queda en http://localhost y los correos de prueba en http://localhost:8025.
 
+`docker compose up -d` levanta 6 servicios: la app, PostgreSQL, Redis, Mailpit, el worker de colas (`queue`) y el Scheduler (`scheduler`). El worker no recarga código solo: después de cambiar correos o jobs, usa `docker compose restart queue`.
+
 > **Windows:** usa siempre `-u sail` al ejecutar comandos en el contenedor. Si se ejecutan como `root`, quedan archivos en `storage/` que la app no puede escribir. Como no hay PHP en el host, Vite genera las rutas tipadas de Wayfinder dentro del contenedor mediante `WAYFINDER_COMMAND` (ya definido en `.env.example`).
 
 ### Cuentas de demo
@@ -118,7 +135,7 @@ Crear y cancelar tienen un límite de 10 peticiones por minuto.
 ## Tests y calidad
 
 ```bash
-docker compose exec -u sail laravel.test php artisan test        # 86 tests
+docker compose exec -u sail laravel.test php artisan test        # 92 tests
 docker compose exec -u sail laravel.test ./vendor/bin/phpstan    # análisis estático nivel 7
 docker compose exec -u sail laravel.test ./vendor/bin/pint --test
 npx vue-tsc --noEmit                                             # tipos del frontend
@@ -152,7 +169,7 @@ tests/Feature/
 
 ## Próximos pasos
 
-- [ ] Recordatorios por email con colas (Jobs + Scheduler) y confirmación al reservar.
+- [x] Confirmación, recordatorio y avisos de cancelación por email con colas y Scheduler.
 - [ ] Agenda en tiempo real con Laravel Reverb (WebSockets).
 - [ ] Pago de seña con pasarela intercambiable (driver de prueba y QR).
 - [ ] Bloqueos de agenda (vacaciones, trámites) desde el panel. El backend ya los soporta.

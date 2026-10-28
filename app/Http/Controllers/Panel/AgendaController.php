@@ -7,6 +7,7 @@ use App\Http\Controllers\Controller;
 use App\Http\Resources\Panel\BookingResource;
 use App\Models\Booking;
 use App\Models\StaffMember;
+use App\Services\BookingNotifier;
 use App\Tenancy\CurrentBusiness;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\RedirectResponse;
@@ -45,7 +46,7 @@ class AgendaController extends Controller
         ]);
     }
 
-    public function updateStatus(Request $request, Booking $booking): RedirectResponse
+    public function updateStatus(Request $request, Booking $booking, BookingNotifier $notifier): RedirectResponse
     {
         $validated = $request->validate([
             'status' => ['required', Rule::enum(BookingStatus::class)],
@@ -63,6 +64,10 @@ class AgendaController extends Controller
         }
 
         $booking->transitionTo($status);
+
+        if ($status === BookingStatus::Cancelled) {
+            $notifier->cancelledByBusiness($booking);
+        }
 
         Inertia::flash('toast', ['type' => 'success', 'message' => "Reserva marcada como {$status->label()}."]);
 

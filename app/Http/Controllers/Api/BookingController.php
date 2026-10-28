@@ -7,6 +7,7 @@ use App\Http\Requests\Booking\StoreBookingRequest;
 use App\Http\Resources\BookingResource;
 use App\Models\Booking;
 use App\Models\Business;
+use App\Services\BookingNotifier;
 use App\Services\BookingService;
 use Carbon\CarbonImmutable;
 use Illuminate\Http\JsonResponse;
@@ -43,11 +44,12 @@ class BookingController extends Controller
         return new BookingResource($booking->load(['business', 'service', 'staffMember']));
     }
 
-    public function cancel(Booking $booking): BookingResource
+    public function cancel(Booking $booking, BookingNotifier $notifier): BookingResource
     {
         abort_unless($booking->isCancellable(), 409, 'Esta reserva ya no se puede cancelar.');
 
         $booking->cancel();
+        $notifier->cancelledByCustomer($booking);
 
         return new BookingResource($booking->load(['business', 'service', 'staffMember']));
     }
