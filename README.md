@@ -129,6 +129,28 @@ La app queda en http://localhost y los correos de prueba en http://localhost:802
 
 Página pública de la demo: http://localhost/reservar/barberia-el-prado
 
+## Producción con Docker
+
+La imagen de producción (`Dockerfile`) usa **FrankenPHP**: PHP 8.5 con Caddy integrado, que obtiene y renueva el certificado HTTPS de Let's Encrypt automáticamente.
+
+- **Build multi-stage:** Composer sin dependencias de desarrollo y frontend compilado con Vite sobre Debian; la imagen final corre sobre **Alpine** (514 MB frente a 1,08 GB con Debian).
+- **Seguridad:** el proceso corre sin root (`setcap` para abrir los puertos 80/443), PHP no expone su versión y OPcache no revalida archivos.
+- **Arranque:** el entrypoint cachea configuración, rutas, vistas y eventos con las variables reales del servidor.
+- **Healthcheck:** contra `/up`.
+
+`compose.prod.yaml` levanta la app, el worker de colas, el Scheduler, PostgreSQL y Redis. Solo la app publica puertos; la base de datos y Redis quedan en una red interna.
+
+```bash
+cp .env.production.example .env.production   # completar dominio, APP_KEY, clave de BD y SMTP
+docker compose -f compose.prod.yaml --env-file .env.production up -d --build
+docker compose -f compose.prod.yaml --env-file .env.production run --rm app php artisan migrate --force
+
+# Opcional: negocio de demo (sin Faker, apto para producción)
+docker compose -f compose.prod.yaml --env-file .env.production run --rm app php artisan db:seed --class=DemoBusinessSeeder --force
+```
+
+Para probarlo en local junto a Sail, usa otro nombre de proyecto (`-p agendapro-prod`), `SERVER_NAME=:80` y `HTTP_PORT=8080`.
+
 ## API pública
 
 La usa la página de reservas y no requiere autenticación.
@@ -195,7 +217,8 @@ tests/Feature/
 - [ ] Bloqueos de agenda (vacaciones, trámites) desde el panel. El backend ya los soporta.
 - [ ] Reprogramar una reserva desde el link del cliente.
 - [x] CI con GitHub Actions.
-- [ ] Despliegue con Docker y demo en vivo.
+- [x] Imagen de producción con FrankenPHP y Docker Compose.
+- [ ] Infraestructura en Oracle Cloud con Terraform, deploy automático y demo en vivo.
 
 ---
 
