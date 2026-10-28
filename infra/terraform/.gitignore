@@ -1,0 +1,7 @@
+# Estado y credenciales: nunca al repositorio.
+.terraform/
+*.tfstate
+*.tfstate.*
+terraform.tfvars
+*.pem
+crash.log

@@ -1,0 +1,38 @@
+#cloud-config
+# Primer arranque de la VM: Docker, firewall y carpeta de la app.
+package_update: true
+package_upgrade: true
+
+packages:
+    - ca-certificates
+    - curl
+    - fail2ban
+    - unattended-upgrades
+
+write_files:
+    # Logs de Docker con rotación: sin esto, llenan el disco con el tiempo.
+    - path: /etc/docker/daemon.json
+      content: |
+          {
+            "log-driver": "json-file",
+            "log-opts": { "max-size": "10m", "max-file": "3" }
+          }
+
+runcmd:
+    # Docker Engine + Compose desde el repositorio oficial.
+    - curl -fsSL https://get.docker.com | sh
+    - usermod -aG docker ubuntu
+    - systemctl enable --now docker
+
+    # Las imágenes de Ubuntu en OCI traen iptables cerrado salvo SSH: además de
+    # la security list de la VCN, hay que abrir 80/443 en la propia VM.
+    - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 80 -j ACCEPT
+    - iptables -I INPUT 6 -m state --state NEW -p tcp --dport 443 -j ACCEPT
+    - iptables -I INPUT 6 -m state --state NEW -p udp --dport 443 -j ACCEPT
+    - netfilter-persistent save
+
+    # Aquí vivirán compose.prod.yaml, .env.production y los backups.
+    - mkdir -p /opt/agendapro/backups
+    - chown -R ubuntu:ubuntu /opt/agendapro
+
+    - systemctl enable --now fail2ban

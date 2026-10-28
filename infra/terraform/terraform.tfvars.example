@@ -1,0 +1,18 @@
+# Copia a terraform.tfvars (está en .gitignore) y completa con tus datos.
+# Los OCIDs y el fingerprint salen de la consola de OCI: Perfil → Mi perfil →
+# Claves API → Agregar clave API.
+
+tenancy_ocid     = "ocid1.tenancy.oc1..aaaa"
+user_ocid        = "ocid1.user.oc1..aaaa"
+fingerprint      = "12:34:56:78:90:ab:cd:ef:12:34:56:78:90:ab:cd:ef"
+private_key_path = "~/.oci/oci_api_key.pem"
+region           = "sa-saopaulo-1"
+
+ssh_public_key = "ssh-ed25519 AAAA... tu-correo@ejemplo.com"
+admin_cidr     = "0.0.0.0/0" # mejor: "TU.IP.PUBLICA.ACTUAL/32"
+
+budget_alert_email = "tu-correo@ejemplo.com"
+
+# Opcional: más recursos (límite gratuito: 4 OCPU, 24 GB)
+# instance_ocpus     = 4
+# instance_memory_gb = 24

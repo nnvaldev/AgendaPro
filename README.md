@@ -179,12 +179,45 @@ Los tests corren contra PostgreSQL real (base `testing` de Sail), así que la re
 
 ### Integración continua
 
-Cada push a `main` y cada pull request ejecutan [`.github/workflows/ci.yml`](.github/workflows/ci.yml) con dos jobs en paralelo:
+Cada push a `main` y cada pull request ejecutan [`.github/workflows/ci.yml`](.github/workflows/ci.yml) con tres jobs en paralelo:
 
 - **Calidad:** Pint, PHPStan, lint y formato del frontend y `vue-tsc`.
 - **Tests:** PHP 8.5 contra un servicio de PostgreSQL 18, con build del frontend para las páginas Inertia.
+- **Terraform:** formato, `validate` y `terraform test` de la infraestructura.
 
 Las acciones están fijadas por SHA y Dependabot propone cada semana actualizaciones de Actions, Composer y npm.
+
+## Infraestructura (Oracle Cloud Always Free)
+
+`infra/terraform/` define todo el servidor como código, dentro del plan gratuito de Oracle Cloud:
+
+| Recurso  | Detalle                                                                                                                                   |
+| -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| Red      | VCN, internet gateway y subnet pública                                                                                                    |
+| Firewall | SSH solo desde la IP del administrador; HTTP, HTTPS y HTTP/3 abiertos                                                                     |
+| Servidor | VM ARM Ampere A1 (2 OCPU, 12 GB por defecto; hasta 4/24 gratis) con Ubuntu 24.04                                                          |
+| Arranque | cloud-init instala Docker, rotación de logs, fail2ban y abre 80/443 en iptables (las imágenes de Ubuntu en OCI vienen cerradas salvo SSH) |
+| Costos   | Presupuesto con alerta por email ante el primer gasto real                                                                                |
+
+Las variables validan los límites de Always Free: pedir más de 4 OCPU, 24 GB o 200 GB de disco falla antes de tocar la nube.
+
+**Tests sin cuenta de Oracle.** `tests/always_free.tftest.hcl` usa un `mock_provider`, así que `terraform test` ejecuta un plan completo en local y en CI, y verifica que la VM esté dentro del plan gratuito, que SSH solo acepte `admin_cidr`, que la web esté abierta y que la alerta de presupuesto exista.
+
+```bash
+cd infra/terraform
+docker run --rm -v "$(pwd):/tf" -w /tf hashicorp/terraform:1.17.0 init -backend=false
+docker run --rm -v "$(pwd):/tf" -w /tf hashicorp/terraform:1.17.0 test
+```
+
+### Crear el servidor
+
+1. Crea la cuenta en Oracle Cloud y elige como región home **São Paulo** o **Santiago**, las más cercanas a Bolivia.
+2. En la consola: **Perfil → Mi perfil → Claves API → Agregar clave API**. Descarga la clave privada y copia los datos que muestra (tenancy, user, fingerprint, región).
+3. `cp terraform.tfvars.example terraform.tfvars` y completa esos datos, tu clave SSH pública, tu IP y tu email.
+4. `terraform init` y `terraform apply`. Al terminar muestra la IP pública y el comando SSH.
+5. Si responde _Out of host capacity_, cambia `availability_domain_index` o baja a 1 OCPU / 6 GB y vuelve a intentar: la capacidad ARM gratuita se libera a lo largo del día.
+
+> Oracle puede recuperar VMs Always Free que pasan semanas casi sin uso. Una app con tráfico y un monitor de uptime cada pocos minutos lo evitan.
 
 ## Estructura
 
@@ -218,7 +251,8 @@ tests/Feature/
 - [ ] Reprogramar una reserva desde el link del cliente.
 - [x] CI con GitHub Actions.
 - [x] Imagen de producción con FrankenPHP y Docker Compose.
-- [ ] Infraestructura en Oracle Cloud con Terraform, deploy automático y demo en vivo.
+- [x] Infraestructura en Oracle Cloud con Terraform y tests sin cuenta.
+- [ ] Deploy automático con GitHub Actions, backups y demo en vivo.
 
 ---
 
